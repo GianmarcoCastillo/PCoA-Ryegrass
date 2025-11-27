@@ -1,0 +1,341 @@
+library(vcfR)
+library(ape)
+library(vegan)
+library(ggplot2)
+library(ggrepel)
+library(ggExtra)
+
+setwd("/home/marco/Downloads/gbs/27/analisis")
+
+folder <- "/home/marco/Downloads/gbs/27/analisis"
+
+vcf_file <- file.path(folder, "FINISH_OUTPUT27_SNP_r2_0.9.vcf.gz")
+
+vcf <- read.vcfR(vcf_file)
+
+original_names <- colnames(vcf@gt)[-1]
+print("Nombres originales de las muestras en VCF:")
+print(original_names)
+
+name_mapping <- data.frame(
+  Original = original_names,
+  New_Name = NA,
+  Region = NA,
+  stringsAsFactors = FALSE
+)
+
+for (i in 1:length(original_names)) {
+  original_name <- original_names[i]
+  
+  # Reanme y Mapeo de Nombres
+  if (grepl("Lm_SNPs_37_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM10"; name_mapping$Region[i] <- "Campiña" }
+  else if (grepl("Lm_SNPs_38_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM18"; name_mapping$Region[i] <- "Santa Cruz" }
+  else if (grepl("Lm_SNPs_39_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM5"; name_mapping$Region[i] <- "Cutervo" }
+  else if (grepl("Lm_SNPs_40_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM17"; name_mapping$Region[i] <- "Cochan" }
+  else if (grepl("Lm_SNPs_41_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM14"; name_mapping$Region[i] <- "Campiña" }
+  else if (grepl("Lm_SNPs_42_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM15"; name_mapping$Region[i] <- "Cochan" }
+  else if (grepl("Lm_SNPs_43_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM9"; name_mapping$Region[i] <- "Campiña" }
+  else if (grepl("Lm_SNPs_44_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM19"; name_mapping$Region[i] <- "Santa Cruz" }
+  else if (grepl("Lm_SNPs_45_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM16"; name_mapping$Region[i] <- "Cochan" }
+  else if (grepl("Lm_SNPs_46_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM20"; name_mapping$Region[i] <- "San Pablo" }
+  else if (grepl("Lm_SNPs_65_dedup.bam", original_name)) { name_mapping$New_Name[i] <- "LM22"; name_mapping$Region[i] <- "Cochan" }
+  
+  # Mapeo para nombres consolidados
+  else if (grepl("AGP_consolidado", original_name)) { name_mapping$New_Name[i] <- "AGP"; name_mapping$Region[i] <- "Amazonas" }
+  else if (grepl("BISII_consolidado", original_name)) { name_mapping$New_Name[i] <- "BISII"; name_mapping$Region[i] <- "Amazonas" }
+  else if (grepl("Ingl_consolidado", original_name)) { name_mapping$New_Name[i] <- "Ingl"; name_mapping$Region[i] <- "Amazonas" }
+  else if (grepl("LM11_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM11"; name_mapping$Region[i] <- "Sendamal" }
+  else if (grepl("LM12_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM12"; name_mapping$Region[i] <- "Sendamal" }
+  else if (grepl("LM13_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM13"; name_mapping$Region[i] <- "Micuypampa" }
+  else if (grepl("LM1_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM1"; name_mapping$Region[i] <- "Paccha" }
+  else if (grepl("LM21_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM21"; name_mapping$Region[i] <- "Baños del Inca" }
+  else if (grepl("LM2_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM2"; name_mapping$Region[i] <- "Cutervo" }
+  else if (grepl("LM3_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM3"; name_mapping$Region[i] <- "Tacabamba" }
+  else if (grepl("LM4_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM4"; name_mapping$Region[i] <- "Tacabamba" }
+  else if (grepl("LM6_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM6"; name_mapping$Region[i] <- "Calquis" }
+  else if (grepl("LM7_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM7"; name_mapping$Region[i] <- "El Agrario" }
+  else if (grepl("LM8_consolidado", original_name)) { name_mapping$New_Name[i] <- "LM8"; name_mapping$Region[i] <- "Bambamarca" }
+  else if (grepl("MAX_consolidado", original_name)) { name_mapping$New_Name[i] <- "MAX"; name_mapping$Region[i] <- "Amazonas" }
+  else if (grepl("WC_consolidado", original_name)) { name_mapping$New_Name[i] <- "WC"; name_mapping$Region[i] <- "Amazonas" }
+  
+  else {
+    name_mapping$New_Name[i] <- original_name
+    name_mapping$Region[i] <- "No asignada"
+  }
+}
+
+print("Mapeo de nombres completado:")
+print(name_mapping)
+
+geno <- extract.gt(vcf, element = "GT", as.numeric = FALSE)
+
+gt_to_num <- function(gt) {
+  ifelse(gt == "0/0", 0,
+         ifelse(gt %in% c("0/1", "1/0"), 1,
+                ifelse(gt == "1/1", 2, NA)))
+}
+
+geno_num <- apply(geno, 2, gt_to_num)
+geno_num <- t(geno_num) 
+
+
+rownames(geno_num) <- name_mapping$New_Name
+
+dist_matrix <- dist(geno_num, method = "euclidean")
+pcoa_res <- pcoa(dist_matrix)
+
+var_exp <- round(100 * pcoa_res$values$Relative_eig[1:2], 2)
+
+pcoa_df <- as.data.frame(pcoa_res$vectors[, 1:2])
+colnames(pcoa_df) <- c("PCo1", "PCo2")
+pcoa_df$Sample <- rownames(pcoa_df)  
+pcoa_df$Region <- name_mapping$Region[match(rownames(pcoa_df), name_mapping$New_Name)]
+pcoa_df$Original_Name <- name_mapping$Original[match(rownames(pcoa_df), name_mapping$New_Name)]
+
+print("Resumen de regiones:")
+print(table(pcoa_df$Region))
+
+n_regions <- length(unique(pcoa_df$Region))
+color_palette <- rainbow(n_regions)
+
+p1 <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  geom_text_repel(aes(label = Sample), size = 3, max.overlaps = 20) +
+  scale_color_manual(values = color_palette) +
+  labs(
+    title = "PCoA ",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Región"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.2)
+  )
+
+print(p1)
+
+p_clean <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = color_palette) +
+  labs(
+    title = "PCoA - Nombres cambiados directamente en R",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Región"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.5)
+  )
+
+print(p_clean)
+
+p_marginal <- ggExtra::ggMarginal(
+  p_clean,
+  type = "density",
+  margins = "both",
+  size = 5,
+  groupColour = TRUE,
+  groupFill = TRUE
+)
+
+print(p_marginal)
+
+## Analisis con nuevos nombres y colores
+
+p_clean <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c(
+    "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231", 
+    "#911EB4", "#46F0F0", "#F032E6", "#BCF60C", "#FABEBE", 
+    "#008080", "#E6BEFF", "#9A6324", "#FFFAC8"
+  )) +
+  labs(
+    title = "PCoA",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Lugar de muestreo"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.5)
+  ) +
+  geom_text_repel(
+    aes(label = ifelse(!is.na(rownames(pcoa_df)), rownames(pcoa_df), "")),
+    size = 3,
+    max.overlaps = 20,
+    show.legend = FALSE
+  )
+
+print(p_clean)
+## CON ETIQUETAS Y DISTRIBUCIONES
+p_base <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c(
+    "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231", 
+    "#911EB4", "#46F0F0", "#F032E6", "#BCF60C", "#FABEBE", 
+    "#008080", "#E6BEFF", "#9A6324", "#CDC673"
+  )) +
+  labs(
+    title = "",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Sample place"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.5)
+  ) +
+  geom_text_repel(
+    aes(label = rownames(pcoa_df)),
+    size = 3,
+    max.overlaps = 50,
+    show.legend = FALSE,
+    box.padding = 0.5,
+    segment.color = "grey50"
+  )
+
+### Distribucion con package ggExtra
+library(ggExtra)
+p_clean <- ggMarginal(
+  p_base,
+  type = "density",  
+  groupColour = TRUE,
+  groupFill = TRUE,
+  alpha = 0.5
+)
+
+print(p_clean)
+
+
+setwd("/home/marco/Downloads/gbs/27/analisis")
+### PCoA ANALISIS LM_27_MUESTRAS
+p_base <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c(
+    "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231", 
+    "#911EB4", "#46F0F0", "#F032E6", "#BCF60C", "#FABEBE", 
+    "#008080", "#E6BEFF", "#9A6324", "#CDC673"
+  )) +
+  labs(
+    title = "",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Lugar de muestreo"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.5)
+  ) +
+  geom_text_repel(
+    aes(label = rownames(pcoa_df)),
+    size = 3.5,
+    max.overlaps = 10,
+    force = 2,
+    force_pull = 1,
+    min.segment.length = 0.2,
+    box.padding = 0.8,
+    point.padding = 0.8,
+    segment.color = "grey40",
+    segment.alpha = 0.7,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    bg.color = "white",
+    bg.r = 0.1
+  )
+## Distribucion
+library(ggExtra)
+p_clean <- ggMarginal(
+  p_base,
+  type = "density",
+  groupColour = TRUE,
+  groupFill = TRUE,
+  alpha = 0.5
+)
+
+# Guardar el gráfico
+ggsave(
+  filename = "pcoa_plot_LM27_FINISH2.pdf",
+  plot = p_clean,
+  width = 12,
+  height = 10,
+  dpi = 500,
+  units = "in"
+)
+
+print(p_clean)
+
+### GGSAVE
+p_marginal <- ggExtra::ggMarginal(
+  p_clean,
+  type = "density",
+  margins = "both",
+  size = 5,
+  groupColour = TRUE,
+  groupFill = TRUE
+)
+
+print(p_marginal)
+
+## GRAFICO LIMPIO!
+
+p_clean <- ggplot(pcoa_df, aes(x = PCo1, y = PCo2, color = Region)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c(
+    "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231", 
+    "#911EB4", "#46F0F0", "#F032E6", "#BCF60C", "#FABEBE", 
+    "#008080", "#E6BEFF", "#9A6324", "#FFFAC8"
+  )) +
+  labs(
+    title = "",
+    x = paste0("PCo1 (", var_exp[1], "%)"),
+    y = paste0("PCo2 (", var_exp[2], "%)"),
+    color = "Sample place"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.5)
+  )
+
+print(p_clean)
+
+p_marginal <- ggExtra::ggMarginal(
+  p_clean,
+  type = "density",
+  margins = "both",
+  size = 5,
+  groupColour = TRUE,
+  groupFill = TRUE
+)
+
+print(p_marginal)
+## GGSAVE
+p_marginal <- ggExtra::ggMarginal(
+  p_clean,
+  type = "density",
+  margins = "both",
+  size = 5,
+  groupColour = TRUE,
+  groupFill = TRUE
+)
+
+
