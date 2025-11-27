@@ -1,0 +1,210 @@
+import allel
+import numpy as np
+from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import linkage, to_tree
+from Bio import Phylo
+import matplotlib.pyplot as plt
+from io import StringIO
+import random
+import dendropy
+from Bio.Phylo.Consensus import bootstrap_consensus
+from Bio.Phylo.BaseTree import Tree
+
+vcf_file = "FINISH_OUTPUT27_SNP_r2_0.9.vcf.gz"
+callset = allel.read_vcf(vcf_file)
+
+geno = allel.GenotypeArray(callset['calldata/GT'])
+gn = geno.to_n_alt().T 
+
+sample_ids = ["LM10", "LM18", "LM5", "LM17", "LM14", "LM15", "LM9", "LM19", 
+              "LM16", "LM20", "LM22", "AGP", "BISII", "Ingl", "LM11", "LM12", 
+              "LM13", "LM1", "LM21", "LM2", "LM3", "LM4", "LM6", "LM7", "LM8", 
+              "MAX", "WC"]
+
+regiones = ["Campiña", "Santa Cruz", "Cutervo", "Cochan", "Campiña", "Cochan", 
+           "Campiña", "Santa Cruz", "Cochan", "San Pablo", "Baños del Inca", "Amazonas", 
+           "Amazonas", "Amazonas", "Sendamal", "Sendamal", "Micuypampa", "Paccha", 
+           "Baños del Inca", "Cutervo", "Tacabamba", "Tacabamba", "Calquis", 
+           "El Agrario", "Bambamarca", "Amazonas", "Amazonas"]
+
+region_dict = dict(zip(sample_ids, regiones))
+
+n_bootstrap = 1000
+n_snps = gn.shape[1]
+
+
+def hamming_distance_matrix(genotypes):
+    """
+    Calcula distancia Hamming (bit a bit) entre muestras
+    Cuenta el número de posiciones donde los genotipos difieren
+    """
+    n_samples = genotypes.shape[0]
+    dist_matrix = np.zeros((n_samples, n_samples))
+    
+    for i in range(n_samples):
+        for j in range(i+1, n_samples):
+            diff_count = np.sum(genotypes[i] != genotypes[j])
+            dist_matrix[i, j] = diff_count / genotypes.shape[1]
+            dist_matrix[j, i] = dist_matrix[i, j]
+    
+    return dist_matrix
+
+
+def build_tree_from_bootstrap(genotypes_boot, sample_names):
+    """Construye árbol UPGMA a partir de datos bootstrap"""
+    dist_matrix = hamming_distance_matrix(genotypes_boot)
+    Z = linkage(squareform(dist_matrix), method='average')
+    root, nodes = to_tree(Z, rd=True)
+    
+    def newick_str(node, parent_dist, leaf_names, newick=""):
+        if node.is_leaf():
+            return "%s:%.4f%s" % (leaf_names[node.id], parent_dist - node.dist, newick)
+        else:
+            if len(newick) > 0:
+                newick = "):%.4f%s" % (parent_dist - node.dist, newick)
+            else:
+                newick = ");"
+            newick = newick_str(node.get_left(), node.dist, leaf_names, newick)
+            newick = newick_str(node.get_right(), node.dist, leaf_names, "," + newick)
+            newick = "(" + newick
+            return newick
+    
+    return newick_str(root, root.dist, sample_names)
+
+print(f"Iniciando {n_bootstrap} réplicas de bootstrap con distancia bit a bit...")
+
+bootstrap_trees_newick = []
+
+for b in range(n_bootstrap):
+    if b % 100 == 0:
+        print(f"Bootstrap {b}/{n_bootstrap}")
+    
+    cols = np.random.choice(n_snps, n_snps, replace=True)
+    gn_boot = gn[:, cols]
+    
+    tree_newick = build_tree_from_bootstrap(gn_boot, sample_ids)
+    bootstrap_trees_newick.append(tree_newick)
+
+print(f"{n_bootstrap} réplicas de bootstrap completadas.")
+
+with open("bootstrap_trees_1000.newick", "w") as f:
+    for i, tree in enumerate(bootstrap_trees_newick):
+        f.write(f"{tree}\n")
+
+print("Calculando árbol principal con distancia bit a bit...")
+dist_matrix_bit = hamming_distance_matrix(gn)
+Z_orig_bit = linkage(squareform(dist_matrix_bit), method='average')
+
+root_bit, nodes_bit = to_tree(Z_orig_bit, rd=True)
+
+def get_newick_bit(node, parent_dist, leaf_names, newick="") -> str:
+    if node.is_leaf():
+        return "%s:%.4f%s" % (leaf_names[node.id], parent_dist - node.dist, newick)
+    else:
+        if len(newick) > 0:
+            newick = "):%.4f%s" % (parent_dist - node.dist, newick)
+        else:
+            newick = ");"
+        newick = get_newick_bit(node.get_left(), node.dist, leaf_names, newick)
+        newick = get_newick_bit(node.get_right(), node.dist, leaf_names, "," + newick)
+        newick = "(" + newick
+        return newick
+
+newick_str_bit = get_newick_bit(root_bit, root_bit.dist, sample_ids)
+
+with open("tree_upgma_bit_distance_1000boot.newick", "w") as f:
+    f.write(newick_str_bit)
+
+print("Calculando valores de bootstrap para los nodos...")
+
+def parse_newick_tree(newick_string):
+    """Convierte string Newick a árbol de Bio.Phylo"""
+    return Phylo.read(StringIO(newick_string), "newick")
+
+bootstrap_trees_phylo = [parse_newick_tree(tree) for tree in bootstrap_trees_newick]
+main_tree_phylo = parse_newick_tree(newick_str_bit)
+
+def calculate_bootstrap_support(main_tree, bootstrap_trees):
+    """Calcula valores de bootstrap para cada nodo del árbol principal"""
+    main_clades = list(main_tree.get_nonterminals())
+    
+    support_values = {}
+    for i, clade in enumerate(main_clades):
+        clade_tips = set(term.name for term in clade.get_terminals())
+        count_support = 0
+        
+        for boot_tree in bootstrap_trees:
+            for boot_clade in boot_tree.get_nonterminals():
+                boot_tips = set(term.name for term in boot_clade.get_terminals())
+                if clade_tips == boot_tips:
+                    count_support += 1
+                    break
+        
+        support_percent = (count_support / len(bootstrap_trees)) * 100
+        support_values[clade] = support_percent
+        print(f"Nodo {i+1}: {support_percent:.1f}% soporte")
+    
+    return support_values
+
+support_values = calculate_bootstrap_support(main_tree_phylo, bootstrap_trees_phylo)
+
+unique_regions = list(set(regiones))
+colors = plt.cm.Set3(np.linspace(0, 1, len(unique_regions)))
+color_map = dict(zip(unique_regions, colors))
+
+fig, ax = plt.subplots(figsize=(18, 14))
+
+Phylo.draw(main_tree_phylo, do_show=False, axes=ax)
+
+for clade in main_tree_phylo.get_nonterminals():
+    if clade in support_values:
+        support = support_values[clade]
+        if support >= 50: 
+            x, y = clade.x, clade.y
+            ax.text(x, y, f"{support:.0f}%", 
+                   fontsize=8, ha='center', va='bottom',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+
+for text in ax.texts:
+    label = text.get_text()
+    for sample in sample_ids:
+        if sample in label:
+            region = region_dict[sample]
+            text.set_color(color_map[region])
+            text.set_fontweight('bold')
+            text.set_fontsize(10)
+            break
+
+legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
+                             markerfacecolor=color_map[region], 
+                             markersize=10, label=region)
+                  for region in unique_regions]
+
+ax.legend(handles=legend_elements, loc='upper right', title="Regiones", fontsize=10)
+
+plt.title(f"Árbol filogenético - Distancia Bit a Bit (Hamming)\nUPGMA con {n_bootstrap} réplicas de bootstrap", 
+          fontsize=16, fontweight='bold', pad=20)
+
+plt.savefig("dendrogram_bit_distance_1000boot_500dpi.pdf", dpi=500, bbox_inches='tight')
+plt.show()
+
+
+with open("tree_with_bootstrap_support_1000.txt", "w") as f:
+    f.write("Árbol filogenético con valores de bootstrap (1000 réplicas)\n")
+    f.write("=" * 60 + "\n\n")
+    f.write(f"Archivo VCF: {vcf_file}\n")
+    f.write(f"Número de muestras: {len(sample_ids)}\n")
+    f.write(f"Número de SNPs: {n_snps}\n")
+    f.write(f"Réplicas de bootstrap: {n_bootstrap}\n\n")
+    
+    f.write("VALORES DE BOOTSTRAP POR NODO:\n")
+    f.write("-" * 40 + "\n")
+    for i, clade in enumerate(main_tree_phylo.get_nonterminals()):
+        if clade in support_values:
+            support = support_values[clade]
+            tips = [term.name for term in clade.get_terminals()]
+            f.write(f"Nodo {i+1}: {support:.1f}% - Muestras: {', '.join(tips)}\n")
+    
+    f.write(f"\nNuevo árbol: tree_upgma_bit_distance_1000boot.newick\n")
+    f.write(f"Árboles bootstrap: bootstrap_trees_1000.newick\n")
+    f.write(f"Figura: dendrogram_bit_distance_1000boot_500dpi.pdf\n")
